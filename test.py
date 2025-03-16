@@ -31,7 +31,7 @@ def modify_frame_rate(input_file, new_speed):
     
     return temp_file
 
-def apply_convolution_reverb(audio_path, ir_path):
+def apply_convolution_reverb(audio_path, ir_path, chunk_size=44100, progress_callback=None):
     """
     Apply convolution reverb in chunks, using overlap-add.
     Optionally call `progress_callback(chunk_idx, total_chunks)` after each chunk
