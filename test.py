@@ -95,6 +95,11 @@ def apply_convolution_reverb(audio_path, ir_path, chunk_size=44100, progress_cal
     convolved_int16 = (convolved * 2**15).astype(np.int16)
     return convolved_int16, sample_rate
 
+def save_audio(audio_data, sample_rate, output_path):
+    """Save the audio data to a file"""
+    sf.write(output_path, audio_data, sample_rate)
+    return output_path
+    
 def plot_waveform_from_file(wav_file, image_path):
     # Open the WAV file
     with wave.open(wav_file, 'rb') as wf:
