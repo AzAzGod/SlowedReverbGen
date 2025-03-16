@@ -13,7 +13,7 @@ import base64
 from pathlib import Path
 
 # Import your helper functions
-from test import modify_frame_rate, apply_convolution_reverb_chunked, save_audio, plot_waveform_from_file
+from test import modify_frame_rate, apply_convolution_reverb, save_audio, plot_waveform_from_file
 
 # ------------------------- PAGE CONFIG -------------------------
 st.set_page_config(
@@ -209,7 +209,7 @@ if uploaded_file is not None:
             # 2. Slow down
             temp_slowed = modify_frame_rate(input_file, speed_factor)
             # 3. Apply reverb
-            processed_audio, sample_rate = apply_convolution_reverb_chunked(temp_slowed, ir_path)
+            processed_audio, sample_rate = apply_convolution_reverb(temp_slowed, ir_path)
             # 4. Save result
             output_path = "processed_output.wav"
             save_audio(processed_audio, sample_rate, output_path)
