@@ -37,8 +37,9 @@ def apply_convolution_reverb(audio_path, ir_path):
     audio = AudioSegment.from_file(audio_path, format="wav")
     samples = np.array(audio.get_array_of_samples())
     
-    is_stereo = audio.channels == 2
-    if is_stereo:
+    # Check if audio is stereo or mono
+    audio_is_stereo = audio.channels == 2
+    if audio_is_stereo:
         samples = samples.reshape((-1, 2))
     
     # Normalize to float32 in range [-1, 1]
@@ -48,24 +49,36 @@ def apply_convolution_reverb(audio_path, ir_path):
     ir_audio = AudioSegment.from_file(ir_path, format="wav")
     ir_samples = np.array(ir_audio.get_array_of_samples())
     
-    if ir_audio.channels == 2:
+    # Check if IR is stereo or mono
+    ir_is_stereo = ir_audio.channels == 2
+    if ir_is_stereo:
         ir_samples = ir_samples.reshape((-1, 2))
     
     ir_samples = ir_samples.astype(np.float32) / (2**15)
     
-    # Apply convolution reverb using fftconvolve
-    if not is_stereo:
+    # Apply convolution reverb with adaptation for mono/stereo combinations
+    if not audio_is_stereo and not ir_is_stereo:
+        # Both mono - simple case
         convolved = fftconvolve(samples, ir_samples, mode='full')
-    else:
-        # Process each channel separately for stereo
+    elif audio_is_stereo and ir_is_stereo:
+        # Both stereo - process each channel
         convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
         convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples[:, 0], mode='full')
         convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples[:, 1], mode='full')
+    elif audio_is_stereo and not ir_is_stereo:
+        # Stereo audio, mono IR
+        convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
+        convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples, mode='full')
+        convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples, mode='full')
+    else:
+        # Mono audio, stereo IR - use the average of IR channels
+        ir_mono = np.mean(ir_samples, axis=1)
+        convolved = fftconvolve(samples, ir_mono, mode='full')
     
     # Normalize the output to prevent clipping
     max_val = np.max(np.abs(convolved))
     if max_val > 0:
-        convolved = convolved / max_val
+        convolved = convolved / max_val * 0.9  # Leave a little headroom
     
     # Convert back to int16
     convolved_int16 = np.int16(convolved * (2**15))
@@ -138,7 +151,7 @@ def main():
     save_audio(processed_audio, sample_rate, output_path)
     
     # Plot the waveform of the output file
-    plot_waveform_from_file(output_path, "output_waveform.png")
+    # plot_waveform_from_file(output_path, "output_waveform.png")
 
     # Clean up the temporary file
     os.remove(temp_file)
