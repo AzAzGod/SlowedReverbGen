@@ -31,59 +31,110 @@ def modify_frame_rate(input_file, new_speed):
     
     return temp_file
 
-def apply_convolution_reverb(audio_path, ir_path):
-    """Apply convolution reverb to the audio file using the impulse response"""
-    # Load the audio file into a NumPy array
+import numpy as np
+from pydub import AudioSegment
+from scipy.signal import fftconvolve
+
+def apply_convolution_reverb_chunked(audio_path, ir_path, chunk_size=44100):
+    """
+    Apply convolution reverb to the audio file in chunks using the impulse response (IR).
+    This uses a simple overlap-add method. 
+
+    :param audio_path: Path to the main audio WAV.
+    :param ir_path: Path to the impulse response WAV.
+    :param chunk_size: Number of samples to process per chunk. 
+                      Larger chunk_size => fewer chunks, but higher memory usage.
+    :return: 
+        - convolved_int16: The final convolved audio in int16 numpy array
+        - output_frame_rate: The sample rate of the output audio
+    """
+    # 1) LOAD MAIN AUDIO
     audio = AudioSegment.from_file(audio_path, format="wav")
-    samples = np.array(audio.get_array_of_samples())
+    frame_rate = audio.frame_rate
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
     
-    # Check if audio is stereo or mono
-    audio_is_stereo = audio.channels == 2
-    if audio_is_stereo:
+    # Reshape if stereo
+    channels = audio.channels
+    if channels == 2:
         samples = samples.reshape((-1, 2))
-    
-    # Normalize to float32 in range [-1, 1]
-    samples = samples.astype(np.float32) / (2**15)
-    
-    # Load impulse response file
-    ir_audio = AudioSegment.from_file(ir_path, format="wav")
-    ir_samples = np.array(ir_audio.get_array_of_samples())
-    
-    # Check if IR is stereo or mono
-    ir_is_stereo = ir_audio.channels == 2
-    if ir_is_stereo:
-        ir_samples = ir_samples.reshape((-1, 2))
-    
-    ir_samples = ir_samples.astype(np.float32) / (2**15)
-    
-    # Apply convolution reverb with adaptation for mono/stereo combinations
-    if not audio_is_stereo and not ir_is_stereo:
-        # Both mono - simple case
-        convolved = fftconvolve(samples, ir_samples, mode='full')
-    elif audio_is_stereo and ir_is_stereo:
-        # Both stereo - process each channel
-        convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
-        convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples[:, 0], mode='full')
-        convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples[:, 1], mode='full')
-    elif audio_is_stereo and not ir_is_stereo:
-        # Stereo audio, mono IR
-        convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
-        convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples, mode='full')
-        convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples, mode='full')
     else:
-        # Mono audio, stereo IR - use the average of IR channels
-        ir_mono = np.mean(ir_samples, axis=1)
-        convolved = fftconvolve(samples, ir_mono, mode='full')
+        samples = samples.reshape((-1, 1))
+
+    # Convert int16 -> float32 in [-1, 1]
+    samples /= 2**15
+
+    # 2) LOAD IMPULSE RESPONSE
+    ir_audio = AudioSegment.from_file(ir_path, format="wav")
+    ir_samples = np.array(ir_audio.get_array_of_samples(), dtype=np.float32)
+
+    ir_channels = ir_audio.channels
+    if ir_channels == 2:
+        ir_samples = ir_samples.reshape((-1, 2))
+    else:
+        ir_samples = ir_samples.reshape((-1, 1))
+
+    # Also convert IR from int16 -> float32 in [-1, 1]
+    ir_samples /= 2**15
+
+    if channels != ir_channels:
+        # If your IR is mono but audio is stereo (or vice versa), 
+        # you have to decide how to handle that. For simplicity,
+        # let's just replicate the IR channels if needed.
+        # This ensures shapes match up for stereo convolution.
+        if ir_channels == 1 and channels == 2:
+            ir_samples = np.column_stack([ir_samples, ir_samples])
+            ir_channels = 2
+        elif ir_channels == 2 and channels == 1:
+            # e.g. if IR is stereo but main audio is mono
+            # use only the first IR channel or average them, etc.
+            # For simplicity, let's average the stereo IR.
+            ir_samples = ir_samples.mean(axis=1, keepdims=True)
+            ir_channels = 1
+
+    # 3) SET UP OUTPUT ARRAY
+    n_samples = samples.shape[0]
+    n_ir = ir_samples.shape[0]
+    # Convolution length: N + M - 1
+    out_length = n_samples + n_ir - 1
     
-    # Normalize the output to prevent clipping
+    # We'll store float32 in [-1, 1] then convert to int16 at the end
+    convolved = np.zeros((out_length, channels), dtype=np.float32)
+
+    # 4) OVERLAP-ADD CHUNKED CONVOLUTION
+    # Process each chunk for each channel
+    start_idx = 0
+    while start_idx < n_samples:
+        end_idx = min(start_idx + chunk_size, n_samples)
+        
+        # Extract chunk
+        audio_chunk = samples[start_idx:end_idx, :]
+        
+        # Convolve channel by channel
+        for ch in range(channels):
+            chunk_conv = fftconvolve(audio_chunk[:, ch], ir_samples[:, ch], mode='full')
+            # Overlap-add into our output buffer
+            convolved[start_idx : start_idx + len(chunk_conv), ch] += chunk_conv.astype(np.float32)
+        
+        # Move to next chunk
+        start_idx += chunk_size
+        
+        # Update progress
+        if progress_callback:
+            progress_callback(chunk_index, total_chunks)
+
+        chunk_index += 1
+        start_idx += chunk_size
+        
+    # 5) NORMALIZE THE RESULT (avoid clipping)
     max_val = np.max(np.abs(convolved))
-    if max_val > 0:
-        convolved = convolved / max_val * 0.9  # Leave a little headroom
-    
-    # Convert back to int16
-    convolved_int16 = np.int16(convolved * (2**15))
-    
-    return convolved_int16, audio.frame_rate
+    if max_val > 1e-9:  # avoid division by zero
+        convolved /= max_val
+
+    # 6) CONVERT BACK TO int16
+    convolved_int16 = (convolved * (2**15)).astype(np.int16)
+
+    return convolved_int16, frame_rate
+
 
 def save_audio(audio_data, sample_rate, output_path):
     """Save the audio data to a file"""
