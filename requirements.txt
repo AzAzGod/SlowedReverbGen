@@ -1,0 +1,10 @@
+matplotlib==3.8.4
+numpy==2.2.3
+pedalboard==0.9.16
+pydub==0.25.1
+PySoundFile==0.9.0.post1
+scipy==1.15.2
+soundfile==0.13.1
+streamlit==1.43.2
+tqdm==4.65.0
+tqdm==4.67.1
