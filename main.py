@@ -22,7 +22,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
+progress_bar = st.progress(0)
 def my_progress_callback(current_chunk, total_chunks):
     progress_bar.progress(current_chunk / total_chunks)
 # ------------------------- CUSTOM CSS -------------------------
