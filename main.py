@@ -23,6 +23,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+def my_progress_callback(current_chunk, total_chunks):
+    progress_bar.progress(current_chunk / total_chunks)
 # ------------------------- CUSTOM CSS -------------------------
 def local_css():
     st.markdown("""
@@ -209,7 +211,7 @@ if uploaded_file is not None:
             # 2. Slow down
             temp_slowed = modify_frame_rate(input_file, speed_factor)
             # 3. Apply reverb
-            processed_audio, sample_rate = apply_convolution_reverb(temp_slowed, ir_path)
+            processed_audio, sample_rate = apply_convolution_reverb(temp_slowed, ir_path, chunk_size = 44100, progress_callback = my_progress_callback)
             # 4. Save result
             output_path = "processed_output.wav"
             save_audio(processed_audio, sample_rate, output_path)
