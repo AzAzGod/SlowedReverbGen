@@ -1,2 +1,2 @@
 # SlowedReverbGen
-Coming Soon
+KTP capstone project
