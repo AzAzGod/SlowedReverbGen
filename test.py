@@ -2,69 +2,147 @@ import numpy as np
 from scipy.signal import fftconvolve
 from pydub import AudioSegment
 import soundfile as sf
+import os
+import wave
+import matplotlib.pyplot as plt
+import struct
 
+# Set ffmpeg path
 AudioSegment.converter = "C:\\ffmpeg\\ffmpeg.exe"
 
-# Importing audio file
-file_path = input("Enter file path: ")
+def get_user_input():
+    """Get file paths and processing parameters from user"""
+    file_path = input("Enter file path: ")
+    new_speed = float(input("Enter new speed (Recommend 0.8): "))
+    ir_path = input("Enter impulse response file path (default: ir.wav): ") or "ir.wav"
+    output_path = input("Enter output file path (default: modified.wav): ") or "modified.wav"
+    
+    return file_path, new_speed, ir_path, output_path
 
-# For test, delete and use file_path after done
-file='2024 prod. ojivolta, earlonthebeat, and Kanye West.wav'
+def modify_frame_rate(input_file, new_speed):
+    """Modify the frame rate of the audio file based on speed factor"""
+    # Change playback speed by modifying the frame rate
+    new_frame_rate = int(input_file.frame_rate * new_speed)
+    modified_file = input_file._spawn(input_file.raw_data, overrides={'frame_rate': new_frame_rate})
+    
+    # Export the slowed file to a temporary WAV file
+    temp_file = "temp.wav"
+    modified_file.export(temp_file, format="wav")
+    
+    return temp_file
 
-input_file = AudioSegment.from_file(file=file, format="wav")
+def apply_convolution_reverb(audio_path, ir_path):
+    """Apply convolution reverb to the audio file using the impulse response"""
+    # Load the audio file into a NumPy array
+    audio = AudioSegment.from_file(audio_path, format="wav")
+    samples = np.array(audio.get_array_of_samples())
+    
+    is_stereo = audio.channels == 2
+    if is_stereo:
+        samples = samples.reshape((-1, 2))
+    
+    # Normalize to float32 in range [-1, 1]
+    samples = samples.astype(np.float32) / (2**15)
+    
+    # Load impulse response file
+    ir_audio = AudioSegment.from_file(ir_path, format="wav")
+    ir_samples = np.array(ir_audio.get_array_of_samples())
+    
+    if ir_audio.channels == 2:
+        ir_samples = ir_samples.reshape((-1, 2))
+    
+    ir_samples = ir_samples.astype(np.float32) / (2**15)
+    
+    # Apply convolution reverb using fftconvolve
+    if not is_stereo:
+        convolved = fftconvolve(samples, ir_samples, mode='full')
+    else:
+        # Process each channel separately for stereo
+        convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
+        convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples[:, 0], mode='full')
+        convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples[:, 1], mode='full')
+    
+    # Normalize the output to prevent clipping
+    max_val = np.max(np.abs(convolved))
+    if max_val > 0:
+        convolved = convolved / max_val
+    
+    # Convert back to int16
+    convolved_int16 = np.int16(convolved * (2**15))
+    
+    return convolved_int16, audio.frame_rate
 
-# Get the slowdown factor from the user
-new_speed = float(input("Enter new speed (Recommend 0.8): "))
+def save_audio(audio_data, sample_rate, output_path):
+    """Save the audio data to a file"""
+    sf.write(output_path, audio_data, sample_rate)
+    return output_path
 
-# Change playback speed by modifying the frame rate
-new_frame_rate = int(input_file.frame_rate * new_speed)
-modified_file = input_file._spawn(input_file.raw_data, overrides={'frame_rate': new_frame_rate})
+def plot_waveform_from_file(wav_file, image_path):
+    # Open the WAV file
+    with wave.open(wav_file, 'rb') as wf:
+        n_channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        framerate = wf.getframerate()
+        n_frames = wf.getnframes()
+        frames = wf.readframes(n_frames)
+        
+        # Determine the correct format for unpacking
+        if sample_width == 1:
+            fmt = "{}B".format(n_frames * n_channels)
+        elif sample_width == 2:
+            fmt = "{}h".format(n_frames * n_channels)
+        else:
+            raise ValueError("Unsupported sample width: {}".format(sample_width))
+        
+        samples = struct.unpack(fmt, frames)
+        samples = np.array(samples)
+        if n_channels > 1:
+            samples = samples.reshape(-1, n_channels)
+    
+    # Create a time axis in seconds
+    duration = samples.shape[0] / framerate
+    time = np.linspace(0, duration, num=samples.shape[0])
+    
+    # Plot the waveform
+    plt.figure(figsize=(12, 6))
+    if n_channels == 1:
+        plt.plot(time, samples, label="Mono")
+    else:
+        for ch in range(n_channels):
+            plt.plot(time, samples[:, ch], label=f"Channel {ch+1}")
+    
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.title("Waveform")
+    plt.legend()
+    plt.tight_layout()
+    
+    # Save the plot to the provided image path
+    plt.savefig(image_path)
+    plt.close()
 
-# Optionally, for compatibility, you could reset the frame rate:
-# modified_file = modified_file.set_frame_rate(input_file.frame_rate)
+def main():
+    # Get user input
+    file_path, new_speed, ir_path, output_path = get_user_input()
+    
+    # Load the input file
+    input_file = AudioSegment.from_file(file=file_path, format="wav")
+    
+    # Modify frame rate
+    temp_file = modify_frame_rate(input_file, new_speed)
+    
+    # Apply convolution reverb
+    processed_audio, sample_rate = apply_convolution_reverb(temp_file, ir_path)
+    
+    # Save the final output
+    save_audio(processed_audio, sample_rate, output_path)
+    
+    # Plot the waveform of the output file
+    plot_waveform_from_file(output_path, "output_waveform.png")
 
-# Export the slowed file to a temporary WAV file
-temp_file = "temp.wav"
-modified_file.export(temp_file, format="wav")
+    # Clean up the temporary file
+    os.remove(temp_file)
+    print(f"Processing complete. Output saved to {output_path}")
 
-# --- Convolution Reverb Implementation ---
-
-# Load the slowed audio file into a NumPy array
-audio = AudioSegment.from_file(temp_file, format="wav")
-samples = np.array(audio.get_array_of_samples())
-if audio.channels == 2:
-    samples = samples.reshape((-1, 2))
-# Normalize to float32 in range [-1, 1]
-samples = samples.astype(np.float32) / (2**15)
-
-# Load your impulse response file (make sure 'ir.wav' exists)
-ir_audio = AudioSegment.from_file("ir.wav", format="wav")
-ir_samples = np.array(ir_audio.get_array_of_samples())
-if ir_audio.channels == 2:
-    ir_samples = ir_samples.reshape((-1, 2))
-ir_samples = ir_samples.astype(np.float32) / (2**15)
-
-# Apply convolution reverb using fftconvolve
-if audio.channels == 1:
-    convolved = fftconvolve(samples, ir_samples, mode='full')
-else:
-    # Process each channel separately for stereo
-    convolved = np.zeros((samples.shape[0] + ir_samples.shape[0] - 1, 2), dtype=np.float32)
-    convolved[:, 0] = fftconvolve(samples[:, 0], ir_samples[:, 0], mode='full')
-    convolved[:, 1] = fftconvolve(samples[:, 1], ir_samples[:, 1], mode='full')
-
-# Normalize the output to prevent clipping
-max_val = np.max(np.abs(convolved))
-if max_val > 0:
-    convolved = convolved / max_val
-
-# Convert back to int16
-convolved_int16 = np.int16(convolved * (2**15))
-
-# Save the final output
-final_file = "modified.wav"
-sf.write(final_file, convolved_int16, audio.frame_rate)
-
-# Optionally, clean up the temporary file
-import os
-os.remove(temp_file)
+if __name__ == "__main__":
+    main()
